@@ -172,11 +172,50 @@ function stopRecording() {
     document.getElementById('volumeBar').style.width = '0%';
 }
 
+// Clear transcript
+function clearTranscript() {
+    // Clear the transcript text in the UI
+    document.getElementById('transcript').textContent = '';
+    document.getElementById('status').textContent = 'Clearing transcript...';
+    
+    // Call the reset endpoint
+    fetch('/reset', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Reset response:', data);
+        if (data.status === 'success') {
+            document.getElementById('status').textContent = 'Transcript cleared';
+        } else {
+            document.getElementById('status').textContent = 'Error: ' + data.message;
+        }
+        
+        // Restore status after a delay
+        setTimeout(() => {
+            document.getElementById('status').textContent = recording ? 'Recording...' : 'Ready';
+        }, 1500);
+    })
+    .catch(error => {
+        console.error('Error resetting transcript:', error);
+        document.getElementById('status').textContent = 'Error clearing transcript';
+        
+        // Restore status after a delay
+        setTimeout(() => {
+            document.getElementById('status').textContent = recording ? 'Recording...' : 'Ready';
+        }, 1500);
+    });
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Connect UI elements
     document.getElementById('startBtn').addEventListener('click', startRecording);
     document.getElementById('stopBtn').addEventListener('click', stopRecording);
+    document.getElementById('clearTranscriptBtn').addEventListener('click', clearTranscript)
     
     // Connect to WebSocket
     connectWebSocket();

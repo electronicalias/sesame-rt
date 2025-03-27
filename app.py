@@ -1,6 +1,6 @@
 # app.py
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import ssl
 import uvicorn
@@ -225,10 +225,26 @@ def transcribe_chunk(new_chunk):
 
 def reset_streaming():
     """Reset streaming buffer and state"""
-    global total_buffer, previous_audio_length, previous_out_processed
-    total_buffer = np.array([])
-    previous_audio_length = 0
-    previous_out_processed = ""
+    global cache_last_channel, cache_last_time, cache_last_channel_len
+    global previous_hypotheses, pred_out_stream, step_num, cache_pre_encode
+    
+    # Reset caches and states to initial values
+    if asr_model is not None:
+        cache_last_channel, cache_last_time, cache_last_channel_len = asr_model.encoder.get_initial_cache_state(
+            batch_size=1
+        )
+    
+    # Reset other streaming variables
+    previous_hypotheses = None
+    pred_out_stream = None
+    step_num = 0
+    
+    # Reset pre-encode cache if it exists
+    if cache_pre_encode is not None and num_channels is not None and pre_encode_cache_size is not None:
+        device = cache_pre_encode.device
+        cache_pre_encode = torch.zeros((1, num_channels, pre_encode_cache_size), device=device)
+    
+    logger.info("Streaming state reset")
 
 # def process_audio_chunk(audio_chunk, sample_rate=16000, threshold=50):
 #     """
@@ -322,6 +338,23 @@ def reset_streaming():
 @app.get("/")
 async def get():
     return FileResponse("static/index.html")
+
+@app.post("/reset")
+async def reset_transcript():
+    """Endpoint to reset the ASR streaming state"""
+    try:
+        reset_streaming()
+        logger.info("Transcript reset via HTTP endpoint")
+        return JSONResponse(
+            content={"status": "success", "message": "Transcript reset successfully"},
+            status_code=status.HTTP_200_OK
+        )
+    except Exception as e:
+        logger.error(f"Error resetting transcript: {str(e)}")
+        return JSONResponse(
+            content={"status": "error", "message": str(e)},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
