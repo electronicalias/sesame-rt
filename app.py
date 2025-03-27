@@ -47,6 +47,8 @@ pre_encode_cache_size = None
 num_channels = None
 cache_pre_encode = None
 preprocessor = None
+silence_counter = 0
+last_speech_time = time.time()
 
 
 @app.on_event("startup")
@@ -163,13 +165,41 @@ def preprocess_audio(audio, asr_model):
 def transcribe_chunk(new_chunk):
     
     global cache_last_channel, cache_last_time, cache_last_channel_len
-    global previous_hypotheses, pred_out_stream, step_num
-    global cache_pre_encode
+    global previous_hypotheses, pred_out_stream, step_num, cache_pre_encode
+    global silence_counter, last_speech_time
     
     # new_chunk is provided as np.int16, so we convert it to np.float32
     # as that is what our ASR models expect
     audio_data = new_chunk.astype(np.float32)
     audio_data = audio_data / 32768.0
+
+    # Check for silence/speech end (simple VAD)
+    is_final = False
+    is_silence = False
+    if len(new_chunk) > 0:
+        # Calculate RMS (Root Mean Square) energy
+        rms = np.sqrt(np.mean(np.square(audio_data)))
+        
+        # Consider it silence if RMS is below threshold
+        silence_threshold = 0.005  # Adjust based on your microphone and environment
+        is_silence = rms < silence_threshold
+        
+        logger.info(f"Audio RMS: {rms}, Silence threshold: {silence_threshold}, Is silence: {is_silence}")
+        
+        # Track silence for several consecutive chunks before finalizing
+        if is_silence:
+            silence_counter += 1
+            logger.info(f"Silence counter: {silence_counter}")
+            
+            # After ~1 second of silence (depends on chunk size), mark as final
+            if silence_counter >= 5 and (time.time() - last_speech_time) > 1.0:
+                is_final = True
+                silence_counter = 0  # Reset counter
+                logger.info("Detected end of speech")
+        else:
+            # Reset silence counter and update last speech time
+            silence_counter = 0
+            last_speech_time = time.time()
         
     # Debug info
     print(f"Buffer size: {len(new_chunk)}")
@@ -184,17 +214,9 @@ def transcribe_chunk(new_chunk):
     # prepend with cache_pre_encode
     processed_signal = torch.cat([cache_pre_encode, processed_signal], dim=-1)
     processed_signal_length += cache_pre_encode.shape[1]
-        
-    # Debug after concatenation
-    print(f"After concat - processed signal shape: {processed_signal.shape}")
-    print(f"After concat - processed signal length: {processed_signal_length}")
     
     # save cache for next time
     cache_pre_encode = processed_signal[:, :, -pre_encode_cache_size:]
-
-    # Just before the torch.cat line
-    print(f"Processed signal shape: {processed_signal.shape}")
-    print(f"Cache shape: {cache_pre_encode.shape}")
     
     with torch.no_grad():
         (
@@ -218,10 +240,9 @@ def transcribe_chunk(new_chunk):
         )
     
     final_streaming_tran = extract_transcriptions(transcribed_texts)
-    logger.info(f"Response: {final_streaming_tran[0]}")
     step_num += 1
     
-    return final_streaming_tran[0]
+    return final_streaming_tran[0], is_final
 
 def reset_streaming():
     """Reset streaming buffer and state"""
@@ -373,13 +394,13 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 audio_np = np.frombuffer(audio_data, dtype=np.int16)
 
-                transcript = transcribe_chunk(audio_np)
+                transcript, is_final = transcribe_chunk(audio_np)
                 
                 # Send transcription back to client
                 await websocket.send_json({
                     "type": "transcript",
                     "text": transcript,
-                    "is_final": False
+                    "is_final": is_final
                 })
                 
                 # Log transcription
