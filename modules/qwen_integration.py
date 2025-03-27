@@ -36,10 +36,11 @@ class QwenResponder:
         self.max_length = max_length
         self.system_prompt = system_prompt
         
-        logger.info(f"Loading Qwen model '{model_name}' on {device}...")
+        logger.info(f"Loading Qwen model '{model}' on {device}...")
         
         # If model and tokenizer are provided directly, use them
         if model is not None and tokenizer is not None:
+            logger.info('Using cached model...')
             self.model = model.to(self.device)
             self.tokenizer = tokenizer
         # Otherwise load from model_name

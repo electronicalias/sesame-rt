@@ -361,7 +361,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 
                 # Log transcription
-                if transcript:
+                if transcript and transcript not in processed_transcripts:
                     logger.info(f"Final transcription: {transcript}")
                 
             except Exception as e:
