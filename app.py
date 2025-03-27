@@ -17,6 +17,8 @@ from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
 from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 from nemo.collections.asr.parts.utils.rnnt_utils import Hypothesis
 from omegaconf import OmegaConf, open_dict
+from modules.qwen_integration import QwenResponder
+from modules.model_handler import ModelHandler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,11 +52,19 @@ preprocessor = None
 silence_counter = 0
 last_speech_time = time.time()
 
+# Global LLM
+qwen_responder = None
+processed_transcripts = set()
+
 
 @app.on_event("startup")
 async def startup_event():
     global asr_model, model_name, cache_last_channel, cache_last_time, cache_last_channel_len, pre_encode_cache_size
-    global num_channels, cache_pre_encode, preprocessor
+    global num_channels, cache_pre_encode, preprocessor, qwen_responder
+    
+    # Set up model handler with your models directory
+    models_dir = "models"
+    model_handler = ModelHandler(models_dir=models_dir)
     
     # Set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -64,7 +74,11 @@ async def startup_event():
     logger.info("Loading ASR model...")
     try:
         # Load pretrained model
-        asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(model_name=model_name)
+        asr_model_location = model_name.replace("/", "_").lower()  # Create safe directory name
+        asr_model = model_handler.load_or_download_nemo_model(
+            model_name=model_name,
+            model_location=asr_model_location
+        )
         
         if model_name == "nvidia/stt_en_fastconformer_hybrid_large_streaming_multi":
             # check that lookahead_size is one of the valid ones
@@ -116,6 +130,31 @@ async def startup_event():
 
         preprocessor = init_preprocessor(asr_model)
         logger.info('Pre-processor Initialized.')
+
+        # Initialise Qwen Model
+        logger.info("Loading Qwen Model")
+        qwen_model_name = "Qwen/Qwen2.5-0.5B"
+        qwen_model_location = "qwen2.5-0.5b"
+
+        llm_model, llm_tokenizer = model_handler.load_or_download_model(
+            model_name=qwen_model_name,
+            model_location=qwen_model_location
+        )
+
+        system_prompt = """You are a very helpful assistant responding to voice inputs.
+            Keep responses conscise, direct and conversational.
+            Focus on being helpful, informative, and engaging.
+        """
+
+        qwen_responder = QwenResponder(
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            device=device,
+            max_length=256,
+            system_prompt=system_prompt
+        )
+        logger.info("Qwen Responder Initialized.")
+
 
     except Exception as e:
         logger.error(f"Failed to load ASR model: {str(e)}")
@@ -184,12 +223,9 @@ def transcribe_chunk(new_chunk):
         silence_threshold = 0.005  # Adjust based on your microphone and environment
         is_silence = rms < silence_threshold
         
-        logger.info(f"Audio RMS: {rms}, Silence threshold: {silence_threshold}, Is silence: {is_silence}")
-        
         # Track silence for several consecutive chunks before finalizing
         if is_silence:
             silence_counter += 1
-            logger.info(f"Silence counter: {silence_counter}")
             
             # After ~1 second of silence (depends on chunk size), mark as final
             if silence_counter >= 5 and (time.time() - last_speech_time) > 1.0:
@@ -200,9 +236,6 @@ def transcribe_chunk(new_chunk):
             # Reset silence counter and update last speech time
             silence_counter = 0
             last_speech_time = time.time()
-        
-    # Debug info
-    print(f"Buffer size: {len(new_chunk)}")
 
     # get mel-spectrogram signal & length
     processed_signal, processed_signal_length = preprocess_audio(audio_data, asr_model)
@@ -267,95 +300,6 @@ def reset_streaming():
     
     logger.info("Streaming state reset")
 
-# def process_audio_chunk(audio_chunk, sample_rate=16000, threshold=50):
-#     """
-#     Process incoming audio chunks using cache-aware streaming approach
-    
-#     Args:
-#         audio_chunk (numpy.ndarray): Audio chunk to process
-#         sample_rate (int): Sample rate of the audio
-#         threshold (int): Silence threshold in samples
-        
-#     Returns:
-#         tuple: (transcript, is_final)
-#     """
-#     global asr_model, frame_len, model_stride, total_buffer
-#     global previous_audio_length, previous_out_processed, last_transcript
-    
-#     # Convert to numpy array if needed
-#     if not isinstance(audio_chunk, np.ndarray):
-#         audio_chunk = np.frombuffer(audio_chunk, dtype=np.float32)
-    
-#     # Simple audio normalization
-#     if np.abs(audio_chunk).max() > 1.0:
-#         audio_chunk = audio_chunk / np.abs(audio_chunk).max()
-    
-#     # Add audio to buffer
-#     total_buffer = np.concatenate((total_buffer, audio_chunk), axis=0)
-    
-#     # Calculate new chunk in samples
-#     new_chunk_samples = int(chunk_len * sample_rate)
-    
-#     # If buffer is too small, don't process yet
-#     if len(total_buffer) < new_chunk_samples:
-#         return "", False
-    
-#     # Process audio in chunks
-#     audio_chunks = []
-#     is_final = False
-#     transcript = ""
-    
-#     # Check if we have enough new audio to process
-#     if len(total_buffer) >= previous_audio_length + new_chunk_samples:
-#         # This is a new chunk to process
-#         audio_signal = torch.tensor(total_buffer, dtype=torch.float32).unsqueeze(0)
-#         if torch.cuda.is_available():
-#             audio_signal = audio_signal.to('cuda')
-        
-#         audio_len = torch.tensor([audio_signal.shape[1]], dtype=torch.long).to(audio_signal.device)
-        
-#         # Return log probs, lengths, and alignment
-#         with torch.no_grad():
-#             log_probs, encoded_len, alignment = asr_model(
-#                 input_signal=audio_signal, 
-#                 input_signal_length=audio_len,
-#                 return_transcription_alignment=True
-#             )
-            
-#             # Get greedy predictions
-#             hypotheses, _ = asr_model.decoding.ctc_decoder_predictions_tensor(
-#                 log_probs, encoded_len, return_hypotheses=False
-#             )
-        
-#         # Update processed transcription
-#         out_processed = hypotheses[0]
-        
-#         # Check if we have a significant change in transcript
-#         if len(out_processed) > len(previous_out_processed):
-#             transcript = out_processed
-#             previous_out_processed = out_processed
-#             last_transcript = transcript
-#         else:
-#             transcript = last_transcript
-        
-#         # Update processed audio length
-#         previous_audio_length = len(total_buffer)
-        
-#         # Check if we should finalize the utterance
-#         # Simple silence detection - check if the last chunk is mostly silent
-#         if len(audio_chunk) > threshold and np.abs(audio_chunk[-threshold:]).max() < 0.02:
-#             is_final = True
-#             # Keep the part we've already processed
-#             total_buffer = total_buffer[-new_chunk_samples:]
-#             previous_audio_length = 0
-#             previous_out_processed = ""
-#             last_transcript = ""
-#     else:
-#         # Not enough new audio to process yet
-#         transcript = last_transcript
-    
-#     return transcript, is_final
-
 @app.get("/")
 async def get():
     return FileResponse("static/index.html")
@@ -395,12 +339,25 @@ async def websocket_endpoint(websocket: WebSocket):
                 audio_np = np.frombuffer(audio_data, dtype=np.int16)
 
                 transcript, is_final = transcribe_chunk(audio_np)
+
+                ai_response = None
+                if is_final and transcript and qwen_responder:
+                    logger.info(f"Generating Qwen Response for: {transcript}")
+                    if transcript not in processed_transcripts:
+                        processed_transcripts.add(transcript)
+                        try:
+                            ai_response = qwen_responder.generate_response(transcript)
+                            logger.info(f"AI Response: {str(ai_response)}")
+                            
+                        except Exception as e:
+                            logger.error(f"Error Generating Qwen Response: {str(e)}")
                 
                 # Send transcription back to client
                 await websocket.send_json({
                     "type": "transcript",
                     "text": transcript,
-                    "is_final": is_final
+                    "is_final": is_final,
+                    "ai_response": ai_response if is_final else None
                 })
                 
                 # Log transcription
@@ -420,7 +377,6 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {str(e)}")
 
 if __name__ == "__main__":
-       
     # Start the server
     # Create SSL context
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)

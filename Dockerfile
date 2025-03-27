@@ -17,6 +17,7 @@ COPY requirements.txt .
 # Install dependencies (this layer will be cached unless requirements.txt changes)
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install websockets
+RUN pip install transformers
 
 # THEN copy the rest of your application code
 COPY . .
