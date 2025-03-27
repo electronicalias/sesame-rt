@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time ASR Demo</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Real-time Speech Recognition</h1>
+        
+        <div class="controls">
+            <button id="startBtn">Start Recording</button>
+            <button id="stopBtn" disabled>Stop Recording</button>
+            <button id="clearTranscript">Clear Transcript</button>
+        </div>
+        
+        <div class="status" id="status">Ready</div>
+        
+        <div class="volume-meter">
+            <div class="volume-bar" id="volumeBar"></div>
+        </div>
+        
+        <div class="transcript-container">
+            <h2>Transcript</h2>
+            <div id="transcript" class="transcript"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
