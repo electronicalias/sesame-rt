@@ -3,7 +3,12 @@
 Mimic the new Sesame Demo.
 
 # Create local ssl certs
+Make sure you are in the root of the repository
 
+If using GitBash on Windows
+`openssl req -x509 -newkey rsa:4096 -keyout ssl/key.pem -out ssl/cert.pem -days 365 -nodes -subj "//CN=localhost"`
+
+If using Mac/Linux
 `openssl req -x509 -newkey rsa:4096 -keyout ssl/key.pem -out ssl/cert.pem -days 365 -nodes -subj "/CN=localhost"`
 
 # Building the container
