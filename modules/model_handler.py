@@ -76,3 +76,41 @@ class ModelHandler:
             logger.info(f"NeMo model saved to {model_file}")
             
         return model
+    
+    def load_or_download_seq2seq_model(self, model_name: str, model_location: str):
+        """
+        Load Hugging Face sequence-to-sequence transformers model (like FLAN-T5) from local cache 
+        or download if not available.
+        
+        Args:
+            model_name: The Hugging Face model name (e.g., "google/flan-t5-large")
+            model_location: Local directory name to store the model
+            
+        Returns:
+            Tuple of (model, tokenizer)
+        """
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        import os
+        from pathlib import Path
+        import logging
+        
+        model_path = os.path.join(self.models_dir, model_location)
+        Path(model_path).mkdir(parents=True, exist_ok=True)
+        
+        # Check if model files exist locally
+        config_file = os.path.join(model_path, "config.json")
+        
+        if os.path.exists(config_file):
+            logger.info(f"Loading seq2seq model from local cache: {model_path}")
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+        else:
+            logger.info(f"Downloading seq2seq model {model_name} and saving to {model_path}")
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            
+            # Save to local directory
+            model.save_pretrained(model_path)
+            tokenizer.save_pretrained(model_path)
+            
+        return model, tokenizer

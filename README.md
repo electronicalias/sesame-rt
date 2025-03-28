@@ -2,6 +2,10 @@
 
 Mimic the new Sesame Demo.
 
+# Create local ssl certs
+
+`openssl req -x509 -newkey rsa:4096 -keyout ssl/key.pem -out ssl/cert.pem -days 365 -nodes -subj "/CN=localhost"`
+
 # Building the container
 
 Use the following command:

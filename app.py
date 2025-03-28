@@ -17,7 +17,7 @@ from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
 from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 from nemo.collections.asr.parts.utils.rnnt_utils import Hypothesis
 from omegaconf import OmegaConf, open_dict
-from modules.qwen_integration import QwenResponder
+from modules.phi3_integration import Phi3Responder
 from modules.model_handler import ModelHandler
 
 # Configure logging
@@ -53,14 +53,14 @@ silence_counter = 0
 last_speech_time = time.time()
 
 # Global LLM
-qwen_responder = None
+llm_responder = None
 processed_transcripts = set()
 
 
 @app.on_event("startup")
 async def startup_event():
     global asr_model, model_name, cache_last_channel, cache_last_time, cache_last_channel_len, pre_encode_cache_size
-    global num_channels, cache_pre_encode, preprocessor, qwen_responder
+    global num_channels, cache_pre_encode, preprocessor, llm_responder
     
     # Set up model handler with your models directory
     models_dir = "models"
@@ -135,24 +135,29 @@ async def startup_event():
         logger.info("Loading Qwen Model")
         qwen_model_name = "Qwen/Qwen2.5-0.5B"
         qwen_model_location = "qwen2.5-0.5b"
+        flan_model_name = "google/flan-t5-large"
+        flan_model_location = "flan-t5-large"
+        phi3_model_name = "luvGPT/luvai-phi3"
+        phi3_model_location = "luvai-phi3"
 
         llm_model, llm_tokenizer = model_handler.load_or_download_model(
-            model_name=qwen_model_name,
-            model_location=qwen_model_location
+            model_name=phi3_model_name,
+            model_location=phi3_model_location
         )
 
         system_prompt = """
-            Your name is mike. You are 28 years old and you have been a chef for about 4 years. You work at a prestigious eatery and your favourite food is Thai. You have a wife and child. You love conversations and are very talkative. You like to ask questions and find out about the person you are talking to.
+            Your name is Mike. You are 28 years old and you have been a chef for about 4 years. You work at a prestigious eatery and your favourite food is Thai. 
+            You have a wife and child. You love conversations and are very talkative. You like to ask questions and find out about the person you are talking to.
         """
 
-        qwen_responder = QwenResponder(
+        llm_responder = Phi3Responder(
             model=llm_model,
             tokenizer=llm_tokenizer,
             device=device,
             max_length=256,
             system_prompt=system_prompt
         )
-        logger.info("Qwen Responder Initialized.")
+        logger.info("Phi3 Responder Initialized.")
 
 
     except Exception as e:
@@ -340,12 +345,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 transcript, is_final = transcribe_chunk(audio_np)
 
                 ai_response = None
-                if is_final and transcript and qwen_responder:
+                if is_final and transcript and llm_responder:
                     logger.info(f"Generating Qwen Response for: {transcript}")
                     if transcript not in processed_transcripts:
                         processed_transcripts.add(transcript)
                         try:
-                            ai_response = qwen_responder.generate_response(transcript)
+                            ai_response = llm_responder.generate_response(transcript)
                             logger.info(f"AI Response: {str(ai_response)}")
                             
                         except Exception as e:

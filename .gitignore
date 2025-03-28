@@ -46,3 +46,7 @@ context_audio.wav
 *.ckpt
 models/*
 !models/.gitkeep
+
+# Certs
+ssl/*
+!ssl/.gitkeep
